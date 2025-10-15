@@ -1,61 +1,157 @@
-<p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
+# Flash-Sale Checkout System
 
-<p align="center">
-<a href="https://github.com/laravel/framework/actions"><img src="https://github.com/laravel/framework/workflows/tests/badge.svg" alt="Build Status"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/dt/laravel/framework" alt="Total Downloads"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/v/laravel/framework" alt="Latest Stable Version"></a>
-<a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
-</p>
+A Laravel 12 API for managing flash sales with limited stock, handling high concurrency without overselling. The system supports temporary holds, checkout flow, and idempotent payment webhooks.
 
-## About Laravel
+## Development Approach
 
-Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
+This project was developed following **Use Case Driven Development (UCDD)** methodology, where each feature was implemented as a complete, testable use case. This approach ensures focused, incremental development and each use case is fully tested before moving to the next
 
-- [Simple, fast routing engine](https://laravel.com/docs/routing).
-- [Powerful dependency injection container](https://laravel.com/docs/container).
-- Multiple back-ends for [session](https://laravel.com/docs/session) and [cache](https://laravel.com/docs/cache) storage.
-- Expressive, intuitive [database ORM](https://laravel.com/docs/eloquent).
-- Database agnostic [schema migrations](https://laravel.com/docs/migrations).
-- [Robust background job processing](https://laravel.com/docs/queues).
-- [Real-time event broadcasting](https://laravel.com/docs/broadcasting).
+### The 5 Core Use Cases
 
-Laravel is accessible, powerful, and provides tools required for large, robust applications.
+- UC1: View Product Details
+- UC2: Create Hold
+- UC3: Create Order from Hold
+- UC4: Process Payment Webhook
+- UC5: Auto-Expire Holds
 
-## Learning Laravel
+## Assumptions & Invariants
 
-Laravel has the most extensive and thorough [documentation](https://laravel.com/docs) and video tutorial library of all modern web application frameworks, making it a breeze to get started with the framework.
+### Database Invariants
+1. **No Overselling**: `products.stock` ≥ 0 always (enforced via pessimistic locking)
+2. **Hold Exclusivity**: Each hold can create at most one order
+3. **Stock Accounting**: Total stock = available + active_holds + completed_orders
+4. **Idempotency**: Same idempotency key always produces same result
 
-You may also try the [Laravel Bootcamp](https://bootcamp.laravel.com), where you will be guided through building a modern Laravel application from scratch.
+### Business Rules
+1. Holds expire after 2 minutes (configurable via `HOLD_EXPIRY_MINUTES`)
+2. Expired holds are auto-released by background scheduler
+3. Payment webhooks are idempotent and safe to retry
+4. Stock is reserved when hold is created, released when hold expires or payment fails
 
-If you don't feel like reading, [Laracasts](https://laracasts.com) can help. Laracasts contains thousands of video tutorials on a range of topics including Laravel, modern PHP, unit testing, and JavaScript. Boost your skills by digging into our comprehensive video library.
+### Concurrency Guarantees
+1. Pessimistic locking (`SELECT ... FOR UPDATE`) prevents race conditions
+2. Database transactions ensure atomic operations
+3. Idempotency keys prevent duplicate webhook processing
+4. Lock timeouts and deadlock detection with retry logic
 
-## Laravel Sponsors
+## Setup Instructions
 
-We would like to extend our thanks to the following sponsors for funding Laravel development. If you are interested in becoming a sponsor, please visit the [Laravel Partners program](https://partners.laravel.com).
+### Installation Steps
 
-### Premium Partners
+1. **Clone the repository**
+```bash
+git clone https://github.com/ibrahim-farhat/flash-sale-checkout.git
+cd flash-sale-checkout
+```
 
-- **[Vehikl](https://vehikl.com)**
-- **[Tighten Co.](https://tighten.co)**
-- **[Kirschbaum Development Group](https://kirschbaumdevelopment.com)**
-- **[64 Robots](https://64robots.com)**
-- **[Curotec](https://www.curotec.com/services/technologies/laravel)**
-- **[DevSquad](https://devsquad.com/hire-laravel-developers)**
-- **[Redberry](https://redberry.international/laravel-development)**
-- **[Active Logic](https://activelogic.com)**
+2. **Copy environment file**
+```bash
+cp .env.example .env
+```
 
-## Contributing
+3. **Start Docker containers**
+```bash
+./vendor/bin/sail up -d
+```
 
-Thank you for considering contributing to the Laravel framework! The contribution guide can be found in the [Laravel documentation](https://laravel.com/docs/contributions).
+If you don't have Sail installed yet:
+```bash
+docker run --rm \
+    -u "$(id -u):$(id -g)" \
+    -v "$(pwd):/var/www/html" \
+    -w /var/www/html \
+    laravelsail/php83-composer:latest \
+    composer install --ignore-platform-reqs
+```
 
-## Code of Conduct
+Then start Sail:
+```bash
+./vendor/bin/sail up -d
+```
 
-In order to ensure that the Laravel community is welcoming to all, please review and abide by the [Code of Conduct](https://laravel.com/docs/contributions#code-of-conduct).
+4. **Generate application key**
+```bash
+./vendor/bin/sail artisan key:generate
+```
 
-## Security Vulnerabilities
+5. **Run migrations**
+```bash
+./vendor/bin/sail artisan migrate
+```
 
-If you discover a security vulnerability within Laravel, please send an e-mail to Taylor Otwell via [taylor@laravel.com](mailto:taylor@laravel.com). All security vulnerabilities will be promptly addressed.
+6. **Seed the database**
+```bash
+./vendor/bin/sail artisan db:seed
+```
 
-## License
+7. **Start the queue worker** (for hold expiry processing)
+```bash
+./vendor/bin/sail artisan queue:work &
+```
 
-The Laravel framework is open-sourced software licensed under the [MIT license](https://opensource.org/licenses/MIT).
+Or run it in a separate terminal:
+```bash
+./vendor/bin/sail artisan queue:work
+```
+
+8. **Start the scheduler** (for hold expiry checks)
+```bash
+./vendor/bin/sail artisan schedule:work &
+```
+
+The application will be available at `http://localhost`
+
+## Running Tests
+
+### Run All Tests
+```bash
+./vendor/bin/sail artisan test
+```
+
+## Manual Testing Guide
+
+### Prerequisites
+The API is available at `http://localhost/api` after setup. You can use `curl`, Postman, or any HTTP client.
+
+## API Reference
+
+### Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/products/{id}` | View product with available stock |
+| POST | `/api/holds` | Create temporary hold |
+| POST | `/api/orders` | Create order from hold |
+| POST | `/api/payments/webhook` | Process payment webhook |
+
+### Error Responses
+
+All endpoints return appropriate HTTP status codes:
+- `200 OK` - Success
+- `201 Created` - Resource created
+- `400 Bad Request` - Invalid input
+- `404 Not Found` - Resource not found
+- `409 Conflict` - Business rule violation (e.g., insufficient stock)
+- `422 Unprocessable Entity` - Validation error
+- `500 Internal Server Error` - Server error
+
+## Logs & Metrics
+
+### Application Logs
+View real-time logs:
+```bash
+./vendor/bin/sail artisan tail
+```
+
+Or check log files:
+```bash
+./vendor/bin/sail exec laravel.test cat storage/logs/laravel.log
+```
+
+### Viewing Metrics
+```bash
+# Search for specific events
+./vendor/bin/sail exec laravel.test grep "Lock acquired" storage/logs/laravel.log
+./vendor/bin/sail exec laravel.test grep "Webhook already processed" storage/logs/laravel.log
+./vendor/bin/sail exec laravel.test grep "Hold expired" storage/logs/laravel.log
+```
